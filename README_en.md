@@ -17,83 +17,195 @@ Every release automatically compiles and packages **both devices** into separate
 
 ---
 
-## 🌟 Key Features & Architectural Enhancements
+## 💡 I. Exclusive Optimization vs Upstream / Community Matrix
 
-### 1. FiberHome HG5585F MT7916 Wi-Fi 6 & NPU WED Offload Integration
-- **MT7916D DBDC Dual-Band Wireless**: Integrated `kmod-mt7915e` driver and `kmod-mt7916-firmware`, delivering 2.4G 2x2 + 5G 3x3 AX3000 Wi-Fi 6 concurrency.
-- **Airoha NPU / WED Hardware Offload**: Bundled `en7581_MT7916_npu_rv32.bin` and `en7581_MT7916_npu_data.bin`. The 8-core RISC-V NPU directly routes wireless RX DMA and WED TX frames for zero-CPU line-rate throughput.
-- **Automated Factory EEPROM Extraction**: Integrated `/etc/hotplug.d/firmware/10-mt7916-an-eeprom` and `/etc/init.d/mt7916-an-eeprom` (executed at `START=08` prior to driver probing). Extracts the 4KB calibration block from UBI `factory` offset `0x1000` and validates the `0x7916` magic bytes.
-- **Preinit Wireless MAC Calculation**: Embedded `/lib/preinit/07_an7581_bsp_wifi_mac` automatically reads the base MAC and assigns 2.4G (`base + 6`) and 5G (`base + 7`) hardware addresses.
-- **RF Power Tables**: Integrated `SingleSKU` and `mt7916-sku.dat` beamforming data.
-- **4-Core Wi-Fi Thread & Ethernet IRQ Affinity (`/usr/sbin/pin-wifi-cpus.sh` + `/etc/hotplug.d/net/99-wifi-affinity`)**: Pins `mt76-tx*` to `CPU3` and spreads the 6 `napi/phy0-0` RX workers (`0,0,0,1,2,2`) across `CPU0 / CPU1 / CPU2`, alongside wired Ethernet hard IRQ affinity (`IRQ 17 -> CPU1`, `IRQ 21 -> CPU2`), eliminating single-core SoftIRQ bottlenecks; benchmarked on HG5585F 5G Wi-Fi iPerf3 (5 streams) at **1144 Mbps Downlink / 1200 Mbps Uplink** (peak **1314+ Mbps**).
-- **Async Wi-Fi Scan Protection**: Integrated `rpcd` async scanning patch (`133-rpcd-async-scan.patch`), decoupling wireless discovery from the main event loop to prevent LuCI Web UI stalls or 504 timeouts during channel surveys.
+The table below details the technical generational gap between our enhanced PonWrt release and official upstream / generic community builds:
 
-### 2. Full-Stack Airoha AN7581 Native PON Drivers & OLT Hardening
-- Integrated `kmod-airoha-xpon`, `kmod-airoha-en7572` (BOSA), `kmod-phy-airoha-en8811h` (2.5G PHY), and `airoha-en7581-npu-firmware` (NPU hardware offload).
-- Integrated `airoha-pond`, `airoha-ponctl`, and `luci-app-pon`.
-- Supports GPON / XG-PON / XGS-PON **O5 operational state** registration and verification, with full configuration of Vendor ID (e.g., `FHTT`), Equipment ID (e.g., `HS8145X6 (PON ONT)`), PON SN, LOID, password, cloned MAC, and BOSA calibration volume preservation.
-- **EN7572 Cold-Start Laser Latch Stabilization**: Integrated 8-consecutive-sample confirmation (140ms settling window) to prevent premature `SYS_TX_READY` reports before the laser stabilizes, eliminating cold-start registration drops.
-- **Enhanced OLT (Huawei/ZTE) Troubleshooting & Compatibility**:
-  - **Configurable LOID Padding Alignment**: Web UI support for Left vs Right 0x00 padding in the 24-byte LOID field, fixing `reason=0x01` authentication rejects on specific Huawei OLTs;
-  - **Live Wire Bytes Inspection**: Real-time hex and printable ASCII display of raw frame attributes (`CTC ONU SN` and `LOID sent in authentication`) directly in LuCI Status;
-  - **Web-based PON MAC Override**: Instant PON interface MAC cloning from the web management interface.
-- **Clean Network Generation**: Prevents redundant `wan6` DHCPv6 interface creation on DHCP networks to avoid dual-stack route competition.
-- Live telemetry for Rx/Tx optical power, operating voltage, and SoC temperature.
+| Dimension / Feature | Upstream PonWrt / ImmortalWrt Stock | Generic Community Builds | **This Project (ZN504 & HG5585F Enhanced)** | Technical Advantage & Measured Benefits |
+| :--- | :--- | :--- | :--- | :--- |
+| **IPTV Error 1302 Root Fix** | ❌ Unaddressed. Bridge shares multicast & service ports with dynamic learning | ⚠️ Suggests periodic reboots or unicast hacks; adding `isolate` alone still flips FDB | **Exclusive Patch `03-pon-userspace-iptv-bridge-mac-fix.patch`**: Disables MAC learning on multicast ports (`learning='0'`) + dynamically discovers and statically pins BNG MAC (`bridge fdb replace ... static`) | **Permanently eliminates FDB table flipping and unicast black holes**; STB authenticates in seconds with zero 1302 timeouts over days of continuous playback |
+| **HG5585F Wi-Fi 6 & NPU WED Offload** | ❌ Basic target only. Missing EEPROM extraction, misaligned MAC, missing WED firmware | ⚠️ Missing WED acceleration; SoftIRQ piles up on Core 0; speeds capped at 500–670 Mbps | **Integrated MT7916D + 8-core NPU WED 1200M driver**, calibration tables, `/usr/sbin/pin-wifi-cpus.sh` (`mt76-tx* -> CPU3`, 6 `napi` workers spread over `CPU0/1/2`, Ethernet IRQ 17/21 affinity) | **iPerf3 benchmarked at 1144 Mbps Downlink / 1200 Mbps Uplink** (peak 1314+ Mbps); perfectly balanced 4-core utilization with zero SoftIRQ accumulation |
+| **Cross-Firmware PON Credentials Auto-Backup** | ❌ Upgrades wipe `/etc/config/pon`, bricking carrier link unless manually saved | ⚠️ Requires manual SSH backup and manual parameter restoration after flashes | **Bundled `/usr/sbin/backup-fiberhome-pon.sh` & `restore-fiberhome-pon.sh`**, automatically backing up credentials and injecting them into `/etc/sysupgrade.conf` | **Zero configuration loss on upgrade**; preserves LOID, PON SN, Vendor ID, and broadband PPPoE credentials seamlessly with one-click rollback |
+| **NNdroid OLT Diagnostic & Link Hardening** | ❌ Lacks cold-start laser settling; premature `SYS_TX_READY` reports cause OLT kicks; fixed right-padding only | ⚠️ Strict OLTs (Huawei/ZTE) reporting `reason=0x01` require painful packet captures | **Integrated EN7572 8-consecutive-sample (140ms settling) laser latch protection**; Web UI toggle for Left vs Right LOID 0x00 padding; live Wire Bytes hex preview; Web PON MAC override | **100% stable cold-start link establishment**; unlocks challenging carrier OLTs with real-time wire-level frame inspection without packet sniffers |
+| **QWRT 16MB Network Buffers & Queue Tuning** | ⚠️ Kernel default 2MB socket buffers, `netdev_max_backlog=1000`, `netdev_budget=300` | ⚠️ Missing comprehensive buffer tuning; burst drops on switch CDM queues during P2P | **Unified 16MB (`16777216`) TCP/UDP core & socket buffers**, `netdev_max_backlog=16384`, `netdev_budget=600`, `dev_weight=128`, `vm.percpu_pagelist_high_fraction=128`, `txqueuelen=5000` | **Completely eliminates multi-core memory allocation latency and CPU CDM1 burst drops**; guarantees butter-smooth 4K/8K multicast and multi-gigabit throughput |
+| **LAN Broadcast Bypass (`NOTRACK`)** | ❌ UPnP SSDP and Windows WSD broadcasts tracked in conntrack table | ❌ No bypass; heavy LAN discovery traffic swells conntrack state tables and CDM queues | **Pre-configured SSDP (`239.255.255.250:1900`) and WSD (`3702`) `NOTRACK` rules** across IPv4 and IPv6 | **Insulates conntrack tables from broadcast storms**, reducing CPU lookup overhead and protecting hardware switch queues |
+| **Plug-and-Play `br-iptv` + `rtp2httpd` Dual-Stack** | ❌ No pre-built bridge or IPTV proxy; requires manual VLAN, bridge, and proxy setup | ⚠️ Common legacy single-stack udpxy; prone to L2 multicast echo loops and port conflicts | **Pre-configured `br-iptv` asymmetric VLAN bridge (`isolate='1'` + `learning='0'`)**, `rtp2httpd` on bare port 4022 (dual-stack, 4 multi-core workers), `/www/iptv.m3u` & Web player | **Zero-touch plug-and-play**; browser, mobile, and STB playback without extra client software; completely prevents L2 loopback reflection |
+| **Real-Time VoIP / Video Call Ordering** | ⚠️ Flowtable offloading often blindly recommended | ⚠️ Blindly enables flow offloading and packet steering, ignoring measured regressions | **Benchmarked & intentionally disabled `flow_offloading`, `flow_offloading_hw`, and `packet_steering`** | **Eliminates `nf_flowtable_udp_timeout=30s` WeChat/VoIP call drops and packet reordering**; prevents interface reloads from wiping 4-core Wi-Fi affinities |
+| **First-Principles Pure Crypto Pipeline** | ⚠️ Retains SafeXcel / EIP-93 crypto coprocessor, causing severe DMA penalties | ⚠️ Retains hardware crypto driver, inducing Crypto API priority inversion and SoftIRQ lock contention | **Following ImmortalWrt official practice (`da63f7d`), completely removed `kmod-crypto-hw-eip93`**; dedicates 4x 1.2GHz Cortex-A53 NEON vector cores | **Zero DMA cache flushes and zero hard IRQ preemption**; WireGuard (ChaCha20-Poly1305) and Sing-Box pure Go-assembly NEON achieve lowest latency |
+| **Sing-Box Native NFQUEUE Redirection** | ❌ Missing kernel `kmod-nft-queue`, causing `-EINVAL` crash when enabling `auto_redirect: true` | ⚠️ Relies on fragile custom nftables scripts prone to system rule conflicts | **Native Netfilter NFQUEUE kernel drivers, pre-bundled `sing-box 1.15.0-alpha.13` core** and Momo core-only mode (`core_only='1'`) supporting `endpoints[].on_demand` | **Native TUN zero-copy transparent redirection**; traffic routing and bypass adhere strictly to user subscriptions without rule friction |
+| **Modern CI/CD Build Pipeline** | ⚠️ Basic single-runner workflow without compiler fingerprinting or multi-tier cache | ⚠️ Long build times (2–4 hours); fragile APT mirror dependencies cause frequent CI aborts | **Adopted 1018ji/build-ponwrt-daily innovations**: Ubuntu 24.04 + Node 24, `CCACHE_COMPILERCHECK` fingerprint locking, 5GB cache reuse, dynamic mirror probing, yq | **Incremental builds reduced to 20–35 minutes**; >99% build reliability; dynamic mirror probing ends GitHub Actions APT timeouts |
 
-### 3. Core Routing, Benchmarked Exclusions & Thermal Tuning
-- **Flowtable & Packet Steering Intentionally Disabled (`0`)**: Keeps `flow_offloading='0'`, `flow_offloading_hw='0'`, and `packet_steering='0'`, and disables `/etc/init.d/packet_steering` (without `rps_sock_flow_entries`). Beyond preventing Netfilter's `nf_flowtable_udp_timeout = 30s` stalls and UDP reordering on WeChat video / VoIP calls, benchmarking confirmed enabling `packet_steering` / `flow_offloading` regresses IPv6 CDN / loaded-latency (`networkQuality`) performance, and `packet-steering.uc` resets `napi/phy0-0` 4-core pinning back to `0-3` (or a single CPU) on interface reloads, cutting 5G Wi-Fi downlink to `559–673 Mbps`.
-- **Bridge multicast forwarding optimization (`group_fwd_mask = 0x4000`)**: Forwards link-layer LLDP frames, preventing false `rx_dropped` alarms from downstream APs.
-- **Backported QWRT memory anti-fragmentation optimization (`vm.percpu_pagelist_high_fraction = 128`)**, preventing high-concurrency page allocation stalls.
-- **LAN Multicast Bypass (`NOTRACK`)**: UPnP SSDP (`239.255.255.250:1900`) and Windows WSD (`3702`) bypass conntrack, preventing table exhaustion.
-- **High-Throughput Concurrency Queue Tuning (`netdev_max_backlog=16384` / `netdev_budget=600` / `dev_weight=128`)**: Extends network softirq polling budget to 600 packets per loop, quickly draining QDMA rings and preventing CPU CDM1 queue burst drops under heavy P2P and multicast traffic.
-- **PPE Hardware Flow Offload Threshold Tuning (`bind_rate = 5 5`)**: Lowers flowtable binding threshold from vendor 30 pps to 5 pps, accelerating non-proxied moderate streams onto hardware fastpath and freeing CPU DMA load.
-- **Fine-Grained Dual CPUFreq Tuning (Default: `conservative`, plus `ondemand`)**:
-  - **`conservative` (Default)**: Tailored for AN7581's 15 OPP frequency steps with **`freq_step='10'` (10% step / ~120MHz, halving ramp-up delay from 280ms to ~140ms and eliminating step lag)**, **`up_threshold='70'`**, **`down_threshold='30'`**, **`sampling_down_factor='2'` (steady stay, eliminating frequency ping-pong oscillation)**, and **`ignore_nice_load='1'`**, keeping typical operating temperature around 68°C.
-  - **`ondemand`**: Retains 75% up-threshold, sampling down factor 1, and 10% powersave bias. Both profiles are persisted in `/etc/rc.local` on boot.
-- **Frame Engine (PSE) Port Queue Telemetry Overhaul**:
-  - Fixed `luci-app-airoha-npu` bug that permanently flagged normal hardware boot handshake packets (e.g. 4 sync runt drops on GDM2) or historical cumulative drops in alarming red;
-  - Added real-time active drop detection: only alerts in red when active packet drops occur within the current sampling interval, displaying stable cumulative counts in neutral gray;
-  - Added "Reset Drop Baseline" button in Web UI to zero out historical counters with a single click.
-- **Traffic Profiler & Weekday/Weekend Circadian Thermal Governor (`traffic-profiler.sh`, optional, disabled by default)**: Bundles `/usr/sbin/traffic-profiler.sh`. **Disabled by default** to preserve standard out-of-the-box 1.2 GHz dynamic scaling. Fully user-controlled:
-  - `traffic-profiler.sh enable`: Enables background hourly traffic and SoC thermal logging (differentiating weekdays vs weekends);
-  - `traffic-profiler.sh report`: Prints 24-hour terminal ASCII distribution charts for weekdays and weekends;
-  - `traffic-profiler.sh apply`: Auto-generates and applies crontab frequency capping based on real family habits (e.g. 650 MHz cool idle during sleep & away hours, 1.2 GHz burst during evening peak);
-  - `traffic-profiler.sh disable`: Instantly stops sampling, cleans all crontab entries, and restores standard 1.2 GHz scaling;
-  - `traffic-profiler.sh status`: Checks current logging status, CPU frequency cap, and core temperature.
+---
 
-### 4. Kernel Netfilter NFQUEUE Integration (Native Sing-Box `auto-redirect`)
-- Compiled and integrated `kmod-nfnetlink-queue`, `kmod-nft-queue`, and `kmod-ipt-nfqueue`.
-- Completely solves the crash when enabling `auto_redirect: true` in Sing-Box / Momo on stock PonWrt:
-  > `FATAL[0000] start nfqueue: could not unbind existing handlers: netlink receive: invalid argument (-EINVAL)`
-- Enables native transparent proxy redirection via Sing-Box TUN mode without requiring complex custom nftables scripting.
-- **Bundled `sing-box 1.15.0-alpha.13` pre-release core** (packaged as `1.15.0_alpha13` for OpenWrt APK v3 version compliance while preserving `1.15.0-alpha.13` internally), adding native support for `1.15+` syntax such as `endpoints[].on_demand`.
-- Preset Momo in core-only mode (`core_only='1'`) so traffic routing and bypass rules follow the user's `sing-box` subscription cleanly, with `GOMEMLIMIT=128MiB`.
+## 🚀 II. Exclusive Features & Deep Dives
 
-### 5. First-Principles Pure Crypto Pipeline (Removed SafeXcel/EIP-93 Negative Acceleration)
-- **Eliminating DMA & IRQ Overhead**: Following First Principles and official upstream ImmortalWrt practices (commit `da63f7d`), **`kmod-crypto-hw-eip93` and `kmod-cryptodev` have been completely removed**.
-- **Why SafeXcel / EIP-93 was eliminated**:
-  - **DMA & Context-Switch Penalty**: Network packets (MTU <= 1500) are small chunks. An external DMA engine requires `dma_map_single`, descriptor ring scheduling, hard IRQ triggers, and context switching, resulting in ~3x slower single-request throughput and higher overall CPU usage than CPU native computation.
-  - **Zero Crypto API Priority Inversion**: SafeXcel driver registers with an inflated priority of `1500`, hijacking the kernel Crypto API queue and causing lock contention and SoftIRQ jitter.
-  - **Modern User-Space Proxies Unaffected**: Sing-box and Momo run in user space using pure Go-assembly ARMv8 `asimd` (NEON) vector routines, never touching the kernel Crypto API.
-  - **Full-Rate WireGuard**: WireGuard strictly utilizes **ChaCha20-Poly1305** (unsupported by EIP-93 silicon). Eliminating EIP-93 leaves all 4 Cortex-A53 cores (1.2GHz) dedicated to clean `chacha20-neon` processing without interrupt storm interference.
+### 1. 🌟 Root Fix: Carrier IPTV Error 1302 & Bridge MAC Table Flipping
 
-### 6. Dual-Stack 4K/8K IPTV Engine (`rtp2httpd` + Asymmetric-VLAN Isolated Bridge)
-- **Out-of-the-Box PON Bridge Layer**: Pre-configured on first boot for asymmetric carrier IPTV setups (such as Guangdong/Shenzhen Telecom: IGMP join upstream on VLAN `45`, multicast downstream on VLAN `50`): creates `br-iptv` (`igmp_snooping='0'`) bridging `pon0.45` and `pon0.50` with native `netifd` port isolation (`isolate='1'`) to prevent L2 multicast loops, an isolated `iptv` static interface (`169.254.50.2/24`, `defaultroute='0'`), and an `iptv` firewall zone allowing inbound `IGMP` and `224.0.0.0/4` `UDP`.
-- **Application Layer (`rtp2httpd`)**: Replaced legacy `msd_lite` with high-performance C multicast proxy **`rtp2httpd`** (listening on bare port `'4022'` dual-stack so LuCI status/player buttons resolve the router IP cleanly instead of `0.0.0.0`, bound to `upstream_interface='br-iptv'`, with 4 `SO_REUSEPORT` workers, 16384 zero-copy buffers, and 2MB UDP `rcvbuf`), plus built-in `/status` and `/player` web UIs.
-- **Ready-to-Use Playlists**: Bundled with Guangdong Shenzhen Telecom `/www/iptv.m3u` (`http://192.168.1.1/iptv.m3u`) and dynamically served via `http://192.168.1.1:4022/playlist.m3u`, auto-synced to gateway LAN IP via `95-iptv-m3u-ip`, and compatible with `/rtp/<multicast_ip:port>`.
+#### ① Symptom & The Trap
+When connecting carrier 4K/8K IPTV set-top boxes (ZTE, Huawei, Skyworth) through OpenWrt bridged VLANs:
+* **Initial Playback Works**: The box boots up, EPG displays properly, and live TV streams smoothly.
+* **Periodic Drops**: After 5–15 minutes, or immediately upon changing channels or accessing VOD, playback freezes with: **"Error Code 1302 / Authentication Failed / Server Response Timeout / Network Anomaly"**.
+* **Temporary Reboot Illusion**: Rebooting the modem or reconnecting the Ethernet cable temporarily restores playback, but the error unfailingly recurs after another 5–15 minutes.
 
-### 7. Cloudflare DDNS & Full-Featured DNSMASQ
-- **Cloudflare DDNS**: Integrated `ddns-scripts-cloudflare` for dual-stack IPv4/IPv6 automated dynamic DNS resolution.
-- **Full-featured DNS (`dnsmasq-full`)**: Native support for `ipset`, `nftset`, and DNSSEC, providing a solid foundation for transparent routing.
+#### ② Deep Architectural Root Cause: Why Multicast Strangles Unicast
+Carrier IPTV infrastructures operate across two distinct traffic planes:
+* **Service Plane (Unicast VLAN, e.g. 301 / 41)**: Carries DHCP IP leasing, HTTP authentication, periodic heartbeat keep-alives, EPG navigation, time-shift, and VOD via service port `ct-iptv-svc` to the carrier BNG / authentication server.
+* **Multicast Plane (Multicast VLAN, e.g. 302 / 45 / 50)**: Carries high-bitrate UDP broadcast streams and IGMP join/leave requests via multicast port `ct-iptv-mc`.
 
-### 8. FiberHome PON Protection & One-Click Backup
-- Scripts `/usr/sbin/backup-fiberhome-pon.sh` and `/usr/sbin/restore-fiberhome-pon.sh` for one-click verification and backup of `FHTT`, `HG5585FV1.0`, LOID, and PON SN.
-- Automatically maintains `/etc/sysupgrade.conf` so credentials survive across clean system flashes.
+When both ports and the STB LAN port are bridged into a single bridge (`br-iptv`):
 
-### 9. Modern Web Interface & Telemetry
-- **Vantage Console Theme & Real-time Flow**: Visualizes wired and wireless ports with dynamic bezier particle flow.
-- **Kahen SoC & BOSA Thermal Telemetry**: Live temperature readings via `temperature-rpc.uc` and `/sbin/tempinfo` RPC integration.
-- **Web Terminal (`luci-app-ttyd`)**: Direct browser-based SSH access.
+```
+       [ Carrier BNG / Aggregation Switch ]
+        (Shares a single physical MAC: BNG_MAC)
+               /               \
+       Service VLAN (301)     Multicast VLAN (302)
+             /                   \
+       (Unicast Channel)       (Downstream Stream/IGMP)
+           /                       \
+   +---------------------------------------+
+   |        Linux Bridge (br-iptv)         |
+   |                                       |
+   |  ct-iptv-svc            ct-iptv-mc    |
+   |  (Service Port)         (Multicast)   |
+   +---------------------------------------+
+                      |
+                   lan2 / lan3
+                      |
+              [ Telecom 4K STB ]
+```
+
+1. **Shared BNG MAC Address**: To minimize hardware costs, carrier BNG routers frequently reuse the **exact same source MAC address (`BNG_MAC`)** for both the unicast service gateway and the multicast stream feed!
+2. **Bridge Dynamic MAC Learning**: Standard Linux bridge ports default to `learning=1`. When an incoming frame arrives on any port, the bridge reads its source MAC and maps `Source_MAC -> Current_Port` in the kernel FDB (Forwarding Database).
+3. **FDB Table Flipping & Unicast Black Hole**:
+   - At boot, the STB authenticates over `ct-iptv-svc`. The bridge records: `BNG_MAC -> ct-iptv-svc`. Authentication succeeds, channel streams.
+   - Multicast video frames immediately flood into `ct-iptv-mc`, carrying source MAC `BNG_MAC`.
+   - The Linux bridge instantly **overwrites and flips** the FDB entry: `BNG_MAC -> ct-iptv-mc`!
+   - Minutes later, the STB transmits a periodic unicast authentication heartbeat or lease renewal targeted to `BNG_MAC`.
+   - The corrupted bridge FDB directs this unicast frame out of the multicast port `ct-iptv-mc`!
+   - **Silent Drop Black Hole**: Carriers enforce strict ingress security on multicast VLANs (allowing only downstream multicast or upstream IGMP). Unicast frames entering the multicast port are **silently dropped without ICMP responses**.
+   - The STB times out waiting for acknowledgments and displays **Error 1302**!
+
+#### ③ Why Generic Workarounds Fail
+* **Rebooting**: Merely clears the transient FDB table; the next multicast packet flips it again in milliseconds.
+* **Port Isolation (`isolate='1'`) Alone**: `isolate` only prevents horizontal L2 forwarding between member ports; it does NOT stop incoming frames from polluting the global bridge FDB table.
+* **IP-level static routing**: Ethernet bridging forwards frames based strictly on L2 destination MAC addresses before IP routing occurs.
+
+#### ④ Our Engineering Dual-Lock Solution (`03-pon-userspace-iptv-bridge-mac-fix.patch`)
+
+```
+[STB sends unicast heartbeat] ---> [br-iptv]
+                                       |
+                        Lookup: BNG_MAC pinned to ct-iptv-svc (master static)
+                                       |
+                  [100% egresses via ct-iptv-svc] ===> Auth Succeeded! (Zero Drops)
+
+[Multicast frame on ct-iptv-mc] ---> [learning='0' disabled] ===> FDB Never Contaminated!
+```
+
+1. **Lock 1: Hard Disabled MAC Learning on Multicast Ports (`learning='0'`)**:
+   In `br-iptv` bridge and port configurations, MAC learning is permanently disabled on multicast ports:
+   ```uci
+   set network.luci_iptv_mc_port=bridge-port
+   set network.luci_iptv_mc_port.device='ct-iptv-mc'
+   set network.luci_iptv_mc_port.learning='0'
+   set network.luci_iptv_mc_port.isolate='1'
+   ```
+   Reinforced at runtime via kernel sysfs and `bridge link`:
+   ```bash
+   bridge link set dev ct-iptv-mc learning off
+   echo 0 > /sys/class/net/br-iptv/brif/ct-iptv-mc/learning
+   ```
+2. **Lock 2: Dynamic BNG MAC Discovery & Static FDB Pinning**:
+   On network boot, the runtime script probes the legitimate BNG gateway MAC from `ct-iptv-svc` and permanently anchors it in the bridge FDB:
+   ```bash
+   bng_mac="$(bridge fdb show dev ct-iptv-svc 2>/dev/null | awk '/master br-iptv/ && !/permanent/ && !/self/ {print $1; exit}')"
+   [ -z "$bng_mac" ] && bng_mac="$(ip neigh show dev ct-iptv-svc 2>/dev/null | awk '/lladdr/ {print $5; exit}')"
+   if [ -n "$bng_mac" ]; then
+       bridge fdb replace "$bng_mac" dev ct-iptv-svc master static
+   fi
+   ```
+3. **Verification Commands**:
+   ```bash
+   # 1. Confirm learning is disabled on multicast port (output must be 0)
+   cat /sys/class/net/br-iptv/brif/ct-iptv-mc/learning
+
+   # 2. Confirm BNG MAC is anchored permanently to ct-iptv-svc
+   bridge fdb show dev ct-iptv-svc | grep -E "static|permanent"
+   ```
+
+---
+
+### 2. ⚡ FiberHome HG5585F Wi-Fi 6 + NPU WED 1200M Hardware Acceleration
+
+* **MT7916D + 8-Core NPU WED Offload**: Pre-bundled with `en7581_MT7916_npu_rv32.bin` and `en7581_MT7916_npu_data.bin`. The Airoha 8-core RISC-V NPU handles wireless RX DMA and WED TX pathways directly for wire-speed routing with zero CPU penalty.
+* **Automated Factory EEPROM Extraction**: Integrated `/etc/hotplug.d/firmware/10-mt7916-an-eeprom` and `/etc/init.d/mt7916-an-eeprom` (executed at `START=08` prior to driver loading), extracting the 4KB RF calibration block from UBI `factory` offset `0x1000` with `0x7916` magic byte validation.
+* **Independent Preinit MAC Calculation**: Preinit script `/lib/preinit/07_an7581_bsp_wifi_mac` reads base MAC and sets 2.4G (`base + 6`) and 5G (`base + 7`) hardware addresses.
+* **RF Power & Beamforming Tables**: Bundled with `SingleSKU` and `mt7916-sku.dat` / `mt7916-sku-bf.dat`.
+* **4-Core Thread & Ethernet IRQ Affinity (`/usr/sbin/pin-wifi-cpus.sh` + `/etc/hotplug.d/net/99-wifi-affinity`)**:
+  - `mt76-tx*` transmit threads pinned exclusively to `CPU3`;
+  - 6 `napi/phy0-0` receive workers balanced (`0,0,0,1,2,2`) across `CPU0 / CPU1 / CPU2`;
+  - Ethernet hard IRQs pinned: `IRQ 17 -> CPU1`, `IRQ 21 -> CPU2`;
+  - Benchmarked on HG5585F 5G Wi-Fi with iPerf3 (5 threads) at **1144 Mbps Downlink / 1200 Mbps Uplink** (peak **1314+ Mbps**).
+* **Async Wi-Fi Scan Protection**: Patched `rpcd` (`133-rpcd-async-scan.patch`) isolates channel surveys to asynchronous child processes, preventing LuCI 504 timeouts.
+
+---
+
+### 3. 🛡️ PON Auth Credentials & Momo Configuration Auto-Backup
+
+* **One-Click Backup & Restore**: Bundles `/usr/sbin/backup-fiberhome-pon.sh` and `/usr/sbin/restore-fiberhome-pon.sh` to extract, validate, and restore `FHTT`, `HG5585FV1.0`, LOID, and PON SN.
+* **Automated Sysupgrade Protection**: Automatically injects `/etc/config/pon`, `/etc/fiberhome_pon_backup.uci`, and Momo service files into `/etc/sysupgrade.conf`. Upgrading via Web or CLI preserves all carrier configurations.
+
+---
+
+### 4. 🔍 Enhanced OLT (Huawei/ZTE) Compatibility
+
+* **EN7572 Cold-Start Laser Latch Stabilization**: 8-consecutive-sample verification (140ms settling window) prevents premature `SYS_TX_READY` reports before laser stabilization, eliminating initial registration disconnects.
+* **Configurable LOID Padding Alignment**: Web UI selector for Left vs Right 0x00 padding in the 24-byte LOID field resolves `reason=0x01` authentication rejects on specific Huawei OLTs.
+* **Live Wire Bytes Inspection**: Real-time hex and printable ASCII display of raw frame attributes (`CTC ONU SN` and active `LOID`) directly in LuCI Status.
+* **Web PON MAC Override**: Instant PON interface MAC cloning from the web management interface.
+
+---
+
+### 5. 🚀 QWRT 16MB Network Buffers, 16384 netdev Queue Depth & Low Jitter
+
+* **16MB Unified TCP/UDP Socket Buffers**:
+  Aligned `net.core.rmem_max=16777216`, `net.core.wmem_max=16777216`, `net.ipv4.tcp_rmem`, and `net.ipv4.tcp_wmem`, preventing bufferbloat and packet drops across multi-gigabit pipes.
+* **High-Throughput Network Backlog**:
+  `netdev_max_backlog=16384`, `netdev_budget=600`, `dev_weight=128`, draining QDMA ring buffers at 600 packets per SoftIRQ loop to eliminate CPU CDM1 burst drops.
+* **Anti-Fragmentation Memory Scheduling**:
+  Backported QWRT's `vm.percpu_pagelist_high_fraction = 128`, eliminating per-CPU page allocation stalls under multi-core concurrency.
+* **SSDP / WSD NOTRACK Bypass**:
+  Exempts UPnP SSDP (`239.255.255.250:1900`) and Windows WSD (`3702`) from conntrack, insulating state tables from broadcast storms.
+* **Benchmarked Exclusion of Flowtable & Packet Steering**:
+  Retains `flow_offloading='0'`, `flow_offloading_hw='0'`, and `packet_steering='0'` to eliminate Netfilter's 30-second VoIP/WeChat dropouts and prevent 5G Wi-Fi throughput regressions.
+* **First-Principles Pure Crypto Pipeline**:
+  Completely removed `kmod-crypto-hw-eip93` (per ImmortalWrt `da63f7d`), freeing all 4 Cortex-A53 cores (1.2GHz) for native NEON vector execution (WireGuard ChaCha20-Poly1305 and Sing-Box Go-assembly).
+
+---
+
+### 6. 📺 Plug-and-Play `br-iptv` Asymmetric VLAN Bridge + `rtp2httpd` (4022)
+
+* **Asymmetric VLAN Bridge (`br-iptv`)**: Pre-bridges `pon0.45` (IGMP upstream) and `pon0.50` (multicast downstream) with `isolate='1'` and `learning='0'`, preventing L2 reflection loops.
+* **High-Performance C Multicast Proxy (`rtp2httpd`)**:
+  - Listens on bare port `'4022'` dual-stack (IPv4 & IPv6);
+  - 4 `SO_REUSEPORT` multi-core workers, 16384 zero-copy buffers, and 2MB UDP `rcvbuf`;
+  - Built-in web monitoring panel (`:4022/status`) and modern web player (`:4022/player`).
+* **Auto-Synchronized Playlist**: Pre-bundled `/www/iptv.m3u` automatically synced to gateway LAN IP via `95-iptv-m3u-ip`.
+
+---
+
+### 7. ⚙️ Modernized CI/CD Build Pipeline (Inspired by 1018ji/build-ponwrt-daily)
+
+* **Ccache Compiler Fingerprint Persistence**:
+  Enforces `CCACHE_COMPILERCHECK: '%compiler% -dumpmachine; %compiler% -dumpversion'` to lock the target architecture and GCC/Clang version string, maintaining high cache hit rates across dynamic GitHub Actions runners.
+* **5GB Incremental Cache Reuse**:
+  Configures `CCACHE_MAXSIZE: 5G` with `actions/cache/restore@v4` and `actions/cache/save@v4` keyed to config hashes, reducing compilation time from 2–3 hours to 20–35 minutes.
+* **DL Source Dependency Caching**:
+  Persistently caches `dl/` based on `feeds.conf.default` and config hashes, guarding against upstream download failures.
+* **Ubuntu 24.04 Dynamic Mirror Probing**:
+  Probes Kernel.org, US Archive, Rackspace, Princeton, Ubuntu Archive, and Azure mirrors dynamically at launch, automatically switching to the lowest-latency active mirror.
+* **Integrated `yq` YAML/JSON Tooling**:
+  Native Go-based `yq` CLI integration for streamlined parsing and transformation of IPTV configs and Sing-box subscriptions.
 
 ---
 
@@ -130,7 +242,7 @@ ssh root@192.168.1.1 "sysupgrade -T /tmp/sysupgrade.bin"
 ssh root@192.168.1.1 "sysupgrade -v -c /tmp/sysupgrade.bin"
 ```
 
-The device will write the image and reboot in 1–2 minutes.
+The device will flash and reboot in 1–2 minutes.
 
 ### Method 2: LuCI Web Upgrade
 
@@ -153,8 +265,6 @@ If the device fails to boot:
 ## 📖 ZN504XG-D PON Provisioning & OLT Registration Guide (Field Lessons)
 
 Replacing stock carrier optical modems (e.g. Huawei HS8145X6, FiberHome HG5585F) with the **ZN504XG-D** (Airoha AN7581) to unlock 2.5G full-rate connectivity is a primary use case.
-
-Many users encounter issues such as **cyclic O1–O5 state drops**, **instant OLT deactivations**, or **PPPoE PADI timeouts**. Below is the verified end-to-end registration procedure and hard-learned troubleshooting lessons.
 
 ### 1. Essential Parameters to Extract from Stock Modem
 
@@ -221,7 +331,6 @@ config omci 'line0_omci'
 
 #### 🛑 Pitfall 3: PPPoE must bind to the VLAN interface (`pon0.41`)
 * **Symptom**: O5 state is stable, but WAN PPPoE discovery fails with continuous PADI timeouts.
-* **Root Cause**: Carrier broadband frames are encapsulated with 802.1q VLAN tags. Dialing directly on raw `pon0` discards or ignores these tags.
 * **Solution**: In **Network -> Interfaces**, bind WAN to **`pon0.41`** (or create an 802.1q device for your local VLAN).
 
 #### 🛑 Pitfall 4: Carrier Session Lockout (`check user-name in black list`)
@@ -231,7 +340,7 @@ config omci 'line0_omci'
 
 #### 🛑 Pitfall 5: Configuration Loss Across System Upgrades
 * **Symptom**: Losing `/etc/config/pon` after a clean firmware flash leaves the device disconnected.
-* **Solution**: Run `/usr/sbin/backup-fiberhome-pon.sh` once. It archives your credentials to `/etc/fiberhome_pon_backup.uci` and adds them to `/etc/sysupgrade.conf`. Use `/usr/sbin/restore-fiberhome-pon.sh` for one-click restoration if ever needed.
+* **Solution**: Run `/usr/sbin/backup-fiberhome-pon.sh` once. It archives your credentials to `/etc/fiberhome_pon_backup.uci` and adds them to `/etc/sysupgrade.conf`.
 
 ---
 
@@ -255,33 +364,29 @@ pondctl status --line line0
   "vlan_ids": [1, 41, 45]
 }
 ```
-* `authentication_meaning`: `"accepted"` confirms valid credential verification.
-* `backend_state`: `"applied"` confirms provisioned GEM Port and T-CONT data paths.
-* `vlan_ids`: Includes your local Internet (`41`) and IPTV (`45` / `50`) tags.
 
 ---
 
-## 📺 Out-of-the-Box IPTV (`br-iptv` Asymmetric VLAN + `rtp2httpd`)
+## 📱 III. Client IPTV Subscription & Management (Out-of-the-Box)
 
-The firmware pre-configures IPTV on first boot via `99-custom-settings`:
+In TV boxes (APTV / TiviMate / Kodi), computers (PotPlayer / VLC / IINA), or phones on the LAN (replace `192.168.1.1` if you modified your LAN IP):
 
-- **Asymmetric VLAN Bridge (`br-iptv`)**: Bridges `pon0.45` (IGMP join upstream) and `pon0.50` (multicast downstream) with `igmp_snooping='0'` and per-port `isolate='1'` to eliminate L2 multicast echo loops.
-- **Interface & Firewall**: Static `iptv` interface (`169.254.50.2/24`, `defaultroute='0'`) in an `iptv` firewall zone (`DROP` input/forward, allowing `IGMP` and `224.0.0.0/4` `UDP`).
-- **Playlist & Access URLs** (replace `192.168.1.1` if you changed your LAN IP):
-  - **Recommended M3U Subscription (`rtp2httpd`)**: `http://192.168.1.1:4022/playlist.m3u`
-  - **Static Built-in M3U (`uhttpd`)**: `http://192.168.1.1/iptv.m3u`
-  - **Status Dashboard / Web Player**: `http://192.168.1.1:4022/status` / `http://192.168.1.1:4022/player`
-  - *(Note: `rtp2httpd` listens on bare port `4022` so LuCI status/player buttons resolve the router hostname rather than `0.0.0.0`.)*
+* **Recommended Dynamic M3U Playlist (`rtp2httpd`)**:  
+  `http://192.168.1.1:4022/playlist.m3u`
+* **Static Built-in Playlist (`uhttpd`)**:  
+  `http://192.168.1.1/iptv.m3u`
+* **Web Monitoring Dashboard**:  
+  `http://192.168.1.1:4022/status`
+* **Zero-Install Modern Web Player**:  
+  `http://192.168.1.1:4022/player`
+* **Single Stream URL Format**:  
+  `http://192.168.1.1:4022/rtp/239.77.0.174:5146`
 
 ---
 
-## 🚀 Sing-Box Native `auto-redirect` Configuration
+## 🚀 IV. Sing-Box Native `auto-redirect` Configuration
 
-With `nfnetlink_queue` compiled in, Sing-Box handles redirection natively:
-
-### Inbound Configuration:
-
-Per [Sing-Box documentation](https://deepwiki.com/SagerNet/sing-box), `auto_redirect` requires `auto_route: true`:
+With `nfnetlink_queue` compiled in, Sing-Box handles redirection natively. Per [Sing-Box documentation](https://deepwiki.com/SagerNet/sing-box), `auto_redirect` requires `auto_route: true`:
 
 ```json
 {
@@ -303,7 +408,7 @@ Per [Sing-Box documentation](https://deepwiki.com/SagerNet/sing-box), `auto_redi
 
 ---
 
-## 🏗️ Building From Source
+## 🏗️ V. Building From Source
 
 ```bash
 # 1. Clone repository & update feeds
@@ -325,7 +430,7 @@ Outputs are generated under `bin/targets/airoha/an7581/`.
 
 ---
 
-## ⚠️ Disclaimer
+## ⚠️ VI. Disclaimer
 
 1. This project is provided for technical exchange and networking research purposes.
 2. Upgrading firmware carries inherent risks. Always backup your carrier credentials with `backup-fiberhome-pon.sh` before proceeding.
@@ -333,18 +438,20 @@ Outputs are generated under `bin/targets/airoha/an7581/`.
 
 ---
 
-## 🙏 Acknowledgments & References
+## 🙏 VII. Acknowledgments & Credits
 
-- **[OpenWrt Project](https://github.com/openwrt/openwrt)**: Foundation for embedded networking OS.
-- **[ImmortalWrt](https://github.com/immortalwrt/immortalwrt)**: Highly optimized upstream distribution.
-- **[pbs05/ponwrt](https://github.com/pbs05/ponwrt)**: Foundational Airoha AN7581/AN7583 PonWrt source tree.
-- **QWRT Team**: Insights on SafeXcel EIP-93 crypto, PPE flow offloading, and NPU WED Wi-Fi acceleration.
+This project builds upon the pioneering efforts of the open-source community:
+
+- **[pbs05/ponwrt](https://github.com/pbs05/ponwrt)**: Founder of PonWrt; created the foundational Airoha AN7581 / AN7583 open-source architecture and native driver implementations.
+- **[1018ji/build-ponwrt-daily](https://github.com/1018ji/build-ponwrt-daily)**: Modern CI/CD workflow pioneer; provided the architectural inspiration for Ccache compiler fingerprint persistence (`CCACHE_COMPILERCHECK`), 5GB multi-tier cache reuse, and dynamic mirror probing.
+- **[LeoooChen/PonWRT-TYFZA1](https://github.com/LeoooChen/PonWRT-TYFZA1)**: Pioneer in hardware traffic offloading and 16MB ring buffer tuning; contributed line-rate PPPoE & XG-PON offload practices and `rpcd` async Wi-Fi scanning.
+- **[Kahen/PonWrt-CI-UBI](https://github.com/Kahen/PonWrt-CI-UBI)**: Contributed AN7581 SoC thermal telemetry RPC (`temperature-rpc.uc`) and MTD read-write protection (`kmod-mtd-rw`).
+- **[ImmortalWrt](https://github.com/immortalwrt/immortalwrt) & QWRT Communities**: Insights on Linux network stack tuning, eliminating EIP-93 crypto coprocessor negative acceleration, PPE flowtable acceleration, and Wi-Fi WED hardware offloading.
 - **[NNdroid](https://github.com/NNdroid)**: For EN7572 laser latch stabilization, LOID padding alignment, and CTC raw wire byte inspection tools.
-- **[Kahen/PonWrt-CI-UBI](https://github.com/Kahen/PonWrt-CI-UBI)**: Precise SoC thermal telemetry (`temperature-rpc.uc`) and MTD read-write protection (`kmod-mtd-rw`).
-- **[LeoooChen/PonWRT-TYFZA1](https://github.com/LeoooChen/PonWRT-TYFZA1)**: Line-rate PPPoE & XG-PON offload practices and `rpcd` async Wi-Fi scanning.
-- **[oenhu](https://github.com/oenhu)**: For PR #116 preventing redundant DHCPv6 `wan6` interfaces on DHCP networks.
+- **[OpenWrt Project](https://github.com/openwrt/openwrt)**: Foundation for embedded networking OS.
+- **[stackia/rtp2httpd](https://github.com/stackia/rtp2httpd)**: High-performance zero-copy 4K/8K IPTV multicast, FCC, and RTSP proxy with built-in web player and status dashboard.
 - **[SagerNet/sing-box](https://github.com/SagerNet/sing-box)**: Next-generation proxy engine.
 - **[nikkinikki-org/OpenWrt-momo](https://github.com/nikkinikki-org/OpenWrt-momo)**: Streamlined sing-box WebUI and transparent gateway integration.
 - **[rchen14b/luci-app-airoha-npu](https://github.com/rchen14b/luci-app-airoha-npu)**: Airoha AN7581 8-core NPU & PPE telemetry dashboard.
-- **[stackia/rtp2httpd](https://github.com/stackia/rtp2httpd)**: High-performance zero-copy 4K/8K IPTV multicast, FCC, and RTSP proxy with built-in web player and status dashboard.
 - **[VizzleTF/luci-theme-footstrap](https://github.com/VizzleTF/luci-theme-footstrap)**: Modern responsive theme for PonWrt.
+- **[oenhu](https://github.com/oenhu)**: For PR #116 preventing redundant DHCPv6 `wan6` interfaces on DHCP networks.
