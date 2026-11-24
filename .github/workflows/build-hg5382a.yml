@@ -180,6 +180,36 @@ jobs:
           sed -i '/^CONFIG_KERNEL_DEBUG_INFO_REDUCED=/d' .config
           printf 'CONFIG_KERNEL_DEBUG_INFO=y\n# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set\nCONFIG_KERNEL_DEBUG_INFO_BTF=y\nCONFIG_KERNEL_DEBUG_INFO_BTF_MODULES=y\nCONFIG_KERNEL_MODULE_ALLOW_BTF_MISMATCH=y\nCONFIG_KERNEL_KPROBES=y\nCONFIG_KERNEL_BPF_EVENTS=y\n' >> .config
 
+          # HG5382A 无 Wi-Fi、无 USB 口：剔除无线与 USB 相关包以减小固件体积
+          # 注意：ext4/f2fs/macvlan/pciutils/libiwinfo 保留，交由 defconfig 按依赖裁决
+          STRIP_PACKAGES="
+            wpad-openssl
+            kmod-cfg80211
+            kmod-mac80211
+            kmod-mt7915e
+            kmod-mt7916-firmware
+            wireless-regdb
+            iw
+            iwinfo
+            rpcd-mod-iwinfo
+            kmod-usb-core
+            kmod-usb3
+            kmod-usb-storage
+            kmod-usb-storage-uas
+            kmod-usb-xhci-hcd
+            kmod-usb-xhci-mtk
+            kmod-fs-vfat
+            kmod-fs-exfat
+            kmod-fs-ntfs3
+            usbutils
+          "
+          for p in ${STRIP_PACKAGES}; do
+            sed -i "/^CONFIG_PACKAGE_${p}=/d" .config
+            printf '# CONFIG_PACKAGE_%s is not set\n' "${p}" >> .config
+          done
+          sed -i '/^CONFIG_MAC80211_DEBUGFS=/d; /^CONFIG_MAC80211_MESH=/d' .config
+          printf '# CONFIG_MAC80211_DEBUGFS is not set\n# CONFIG_MAC80211_MESH is not set\n' >> .config
+
           if [ "${{ github.event.inputs.cache_mode || '使用缓存' }}" != "不使用缓存" ]; then
             sed -i '/^CONFIG_DEVEL=/d; /^CONFIG_CCACHE=/d' .config
             printf 'CONFIG_DEVEL=y\nCONFIG_CCACHE=y\n' >> .config
@@ -194,6 +224,15 @@ jobs:
             echo "::error::Target device ${TARGET_DEVICE} was not selected in .config"
             exit 1
           fi
+
+          echo "=== Stripped wireless/USB packages final state ==="
+          for p in ${STRIP_PACKAGES}; do
+            if grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
+              echo "  WARN ${p} still enabled (pulled back by dependency)"
+            else
+              echo "  OK   ${p}: disabled"
+            fi
+          done
 
       - name: Download package sources
         run: make download -j"$(nproc)"
