@@ -202,6 +202,10 @@ jobs:
             kmod-fs-exfat
             kmod-fs-ntfs3
             usbutils
+            tailscale
+            luci-app-tailscale
+            zerotier
+            luci-app-zerotier
           "
           for p in ${STRIP_PACKAGES}; do
             sed -i "/^CONFIG_PACKAGE_${p}=/d" .config
@@ -209,6 +213,11 @@ jobs:
           done
           sed -i '/^CONFIG_MAC80211_DEBUGFS=/d; /^CONFIG_MAC80211_MESH=/d' .config
           printf '# CONFIG_MAC80211_DEBUGFS is not set\n# CONFIG_MAC80211_MESH is not set\n' >> .config
+
+          # LuCI 只保留简体中文：语言选择只留 zh_Hans，翻译包只留 -zh-cn
+          sed -i -E '/^CONFIG_LUCI_LANG_/d' .config
+          printf 'CONFIG_LUCI_LANG_zh_Hans=y\n' >> .config
+          sed -i -E '/^CONFIG_PACKAGE_luci-i18n-/ { /-zh-cn=/!d }' .config
 
           if [ "${{ github.event.inputs.cache_mode || '使用缓存' }}" != "不使用缓存" ]; then
             sed -i '/^CONFIG_DEVEL=/d; /^CONFIG_CCACHE=/d' .config
