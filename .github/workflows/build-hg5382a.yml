@@ -171,12 +171,19 @@ jobs:
           printf 'CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_%s=y\n' "${TARGET_DEVICE}" >> .config
           printf 'CONFIG_TARGET_DEVICE_PACKAGES_airoha_an7581_DEVICE_%s=""\n' "${TARGET_DEVICE}" >> .config
 
-          # 内核调试信息 / BTF（沿用上游设置）
-          sed -i '/^CONFIG_KERNEL_DEBUG_INFO_REDUCED=/d' .config
-          printf 'CONFIG_KERNEL_DEBUG_INFO=y\n# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set\nCONFIG_KERNEL_DEBUG_INFO_BTF=y\nCONFIG_KERNEL_DEBUG_INFO_BTF_MODULES=y\nCONFIG_KERNEL_MODULE_ALLOW_BTF_MISMATCH=y\nCONFIG_KERNEL_KPROBES=y\nCONFIG_KERNEL_BPF_EVENTS=y\n' >> .config
+          # 内核调试信息：保留 DEBUG_INFO（panic 时能定位文件行号）
+          # BTF / BPF_EVENTS 仅供 eBPF（honk）使用，透明代理移除后一律关闭
+          sed -i -E '/^CONFIG_KERNEL_(DEBUG_INFO|DEBUG_INFO_BTF|DEBUG_INFO_BTF_MODULES|DEBUG_INFO_REDUCED|MODULE_ALLOW_BTF_MISMATCH|BPF_EVENTS)=/d' .config
+          printf 'CONFIG_KERNEL_DEBUG_INFO=y\n# CONFIG_KERNEL_DEBUG_INFO_REDUCED is not set\n# CONFIG_KERNEL_DEBUG_INFO_BTF is not set\n# CONFIG_KERNEL_DEBUG_INFO_BTF_MODULES is not set\n# CONFIG_KERNEL_MODULE_ALLOW_BTF_MISMATCH is not set\n# CONFIG_KERNEL_BPF_EVENTS is not set\nCONFIG_KERNEL_KPROBES=y\n' >> .config
 
           # HG5382A 无 Wi-Fi、无 USB 口：剔除无线与 USB 相关包以减小固件体积
           # 注意：ext4/f2fs/macvlan/pciutils/libiwinfo 保留，交由 defconfig 按依赖裁决
+          # 剔除清单：注释必须写在这里（变量外部），写进 STRIP_PACKAGES 内会被当作包名分词处理
+          #   tailscale 三件套须一起剔，否则 luci-app-tailscale-community 的依赖会把 tailscale 拉回
+          #   yq 仅为 Nikki/脚本预留，源码 files/ 零调用
+          #   honk 整套（核心 + LuCI + i18n + dae 库 + geo 数据）及其 nft/tproxy/queue 依赖
+          #   bpftool / kmod-sched-bpf 随 honk 移除
+          #   kmod-tun / kmod-inet-diag / kmod-veth / kmod-dummy 刻意保留（VPN 与 ss 诊断需要）
           STRIP_PACKAGES="
             wpad-openssl
             kmod-cfg80211
@@ -198,9 +205,22 @@ jobs:
             kmod-fs-ntfs3
             usbutils
             tailscale
-            luci-app-tailscale
-            zerotier
-            luci-app-zerotier
+            luci-app-tailscale-community
+            luci-i18n-tailscale-community-zh-cn
+            yq
+            honk
+            luci-app-honk
+            luci-i18n-honk-zh-cn
+            luci-lib-daeuniverse
+            luci-i18n-daeuniverse-zh-cn
+            v2ray-geoip
+            v2ray-geosite
+            kmod-nft-tproxy
+            kmod-nft-socket
+            kmod-nft-queue
+            kmod-nfnetlink-queue
+            bpftool
+            kmod-sched-bpf
           "
           for p in ${STRIP_PACKAGES}; do
             sed -i "/^CONFIG_PACKAGE_${p}=/d" .config
@@ -229,7 +249,7 @@ jobs:
             exit 1
           fi
 
-          echo "=== Stripped wireless/USB packages final state ==="
+          echo "=== Stripped packages final state (wireless/USB/tailscale/yq) ==="
           for p in ${STRIP_PACKAGES}; do
             if grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
               echo "  WARN ${p} still enabled (pulled back by dependency)"
