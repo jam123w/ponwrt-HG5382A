@@ -223,6 +223,11 @@ jobs:
             kmod-nfnetlink-queue
             bpftool
             kmod-sched-bpf
+            # ttyd：上游打包 ttyd 1.7.7 与 libwebsockets 5.1 不兼容，
+            # 二进制在但一启动就 lws_context_destroy 退出，留着只是个坏菜单
+            luci-app-ttyd
+            luci-i18n-ttyd-zh-cn
+            ttyd
           "
           for p in ${STRIP_PACKAGES}; do
             sed -i "/^CONFIG_PACKAGE_${p}=/d" .config
