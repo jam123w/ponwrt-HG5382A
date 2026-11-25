@@ -41,7 +41,7 @@ env:
   # 唯一编译的目标设备 profile
   TARGET_DEVICE: fiberhome_hg5382a
   CCACHE_COMPILERCHECK: '%compiler% -dumpmachine; %compiler% -dumpversion'
-  CCACHE_MAXSIZE: 5G
+  CCACHE_MAXSIZE: 10G
 
 jobs:
   sync-upstream:
@@ -150,7 +150,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .ccache
-          key: ponwrt-ccache-hg5382a-${{ hashFiles('configs/*.config') }}-${{ github.sha }}
+          key: ponwrt-ccache-hg5382a-${{ hashFiles('configs/*.config') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             ponwrt-ccache-hg5382a-${{ hashFiles('configs/*.config') }}-
             ponwrt-ccache-hg5382a-
@@ -251,7 +251,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .ccache
-          key: ponwrt-ccache-hg5382a-${{ hashFiles('configs/*.config') }}-${{ github.sha }}
+          key: ponwrt-ccache-hg5382a-${{ hashFiles('configs/*.config') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Show compiler cache statistics
         if: always() && ((github.event.inputs.cache_mode || '使用缓存') != '不使用缓存')
