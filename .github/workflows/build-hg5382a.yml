@@ -41,7 +41,9 @@ env:
   # 唯一编译的目标设备 profile
   TARGET_DEVICE: fiberhome_hg5382a
   CCACHE_COMPILERCHECK: '%compiler% -dumpmachine; %compiler% -dumpversion'
-  CCACHE_MAXSIZE: 10G
+  # ccache 上限 5G：GitHub Actions 单仓库缓存总额度 10G，
+  # 给 ccache 10G 会把 dl 下载缓存挤掉，反而每次重下源码
+  CCACHE_MAXSIZE: 5G
 
 jobs:
   sync-upstream:
