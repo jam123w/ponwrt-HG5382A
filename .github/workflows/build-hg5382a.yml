@@ -26,20 +26,13 @@ on:
   schedule:
     # 每天 UTC 21:00（北京时间次日 05:00）检查上游是否有更新
     - cron: '0 21 * * *'
-  push:
-    branches:
-      - master
-    paths:
-      - 'configs/**'
-      - 'files/**'
-      - 'scripts/**'
-      - 'target/**'
-      - 'package/**'
-      - '.github/workflows/**'
+  # 注意：push 触发已按需求关闭，修改文件后不会自动编译；
+  # 需要出包请在 Actions 页面手动 Run workflow。
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # 手动触发 / 定时各自成组，避免互相抢线取消正在跑的构建
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
 
 env:
   # 上游源仓库（跟随其 master 自动更新）
@@ -88,12 +81,12 @@ jobs:
             exit 0
           fi
 
-          # 合并上游；冲突时 .github/workflows 下保留本 fork 自己的配置
-          git merge --no-edit -X ours "upstream/${UPSTREAM_BRANCH}" || {
+          # 合并上游；提交信息带 [skip ci]，避免这次推送再触发一轮重复构建
+          git merge --no-edit -m "chore: sync upstream ${UPSTREAM_BRANCH} [skip ci]" -X ours "upstream/${UPSTREAM_BRANCH}" || {
             echo "::warning::Auto-merge had conflicts; keeping fork workflow files."
             git checkout --ours .github/workflows || true
             git add -A
-            git commit --no-edit || true
+            git commit --no-edit -m "chore: sync upstream ${UPSTREAM_BRANCH} (conflicts resolved) [skip ci]" || true
           }
 
           # 由 GITHUB_TOKEN 发起的 push 不会再次触发 Actions，天然避免循环
@@ -103,6 +96,8 @@ jobs:
   build:
     name: Build HG5382A
     needs: sync-upstream
+    # 手动触发无条件编译；定时触发仅在上游确实有更新时才编译
+    if: github.event_name == 'workflow_dispatch' || needs.sync-upstream.outputs.updated == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     permissions:
