@@ -51,6 +51,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       updated: ${{ steps.sync.outputs.updated }}
+      changelog: ${{ steps.sync.outputs.changelog }}
     permissions:
       contents: write
     steps:
@@ -73,12 +74,18 @@ jobs:
           git fetch upstream "${UPSTREAM_BRANCH}" --tags
 
           UPSTREAM_SHA="$(git rev-parse upstream/${UPSTREAM_BRANCH})"
-          FORK_SHA="$(git rev-parse HEAD)"
+          OLD_SHA="$(git rev-parse HEAD)"
           echo "upstream=${UPSTREAM_SHA}"
-          echo "fork=${FORK_SHA}"
+          echo "fork=${OLD_SHA}"
 
-          if [ "${UPSTREAM_SHA}" = "${FORK_SHA}" ]; then
+          # 输出多行变更日志到 GITHUB_OUTPUT，供 Release 说明引用
+          emit_changelog() {
+            printf 'changelog<<__CHANGELOG_EOF__\n%s\n__CHANGELOG_EOF__\n' "$1" >> "${GITHUB_OUTPUT}"
+          }
+
+          if [ "${UPSTREAM_SHA}" = "${OLD_SHA}" ]; then
             echo "updated=false" >> "${GITHUB_OUTPUT}"
+            emit_changelog "- 上游 master 无新提交，本次为手动重新编译"
             echo "Fork already matches upstream, nothing to sync."
             exit 0
           fi
@@ -90,6 +97,17 @@ jobs:
             git add -A
             git commit --no-edit -m "chore: sync upstream ${UPSTREAM_BRANCH} (conflicts resolved) [skip ci]" || true
           }
+
+          # 收集本次同步带进来的上游提交，供 Release 说明使用
+          NEW_SHA="$(git rev-parse HEAD)"
+          COMMIT_COUNT="$(git rev-list --no-merges --count "${OLD_SHA}..${NEW_SHA}" 2>/dev/null || echo 0)"
+          LOG="$(git log --no-merges --reverse --pretty=format:'- %s (%h)' "${OLD_SHA}..${NEW_SHA}" 2>/dev/null | head -n 30 || true)"
+          if [ -z "${LOG}" ]; then
+            LOG="- 上游本次仅更新了合并提交，无独立变更条目"
+          elif [ "${COMMIT_COUNT}" -gt 30 ] 2>/dev/null; then
+            LOG="${LOG}"$'\n'"- …其余 $((COMMIT_COUNT - 30)) 条已省略，完整记录见上游仓库提交历史"
+          fi
+          emit_changelog "${LOG}"
 
           # 由 GITHUB_TOKEN 发起的 push 不会再次触发 Actions，天然避免循环
           git push origin HEAD:master
@@ -241,6 +259,11 @@ jobs:
           printf 'CONFIG_LUCI_LANG_zh_Hans=y\n' >> .config
           sed -i -E '/^CONFIG_PACKAGE_luci-i18n-/ { /-zh-cn=/!d }' .config
 
+          # 预装 UPnP：miniupnpd 的 nftables 后端 + LuCI 管理页
+          # 包默认只是装上，服务是否启停由 files/etc/uci-defaults/99-ponwrt-upnp 决定
+          sed -i -E '/^CONFIG_PACKAGE_(miniupnpd|luci-app-upnp)/d' .config
+          printf 'CONFIG_PACKAGE_miniupnpd-nftables=y\nCONFIG_PACKAGE_luci-app-upnp=y\n' >> .config
+
           if [ "${{ github.event.inputs.cache_mode || '使用缓存' }}" != "不使用缓存" ]; then
             sed -i '/^CONFIG_DEVEL=/d; /^CONFIG_CCACHE=/d' .config
             printf 'CONFIG_DEVEL=y\nCONFIG_CCACHE=y\n' >> .config
@@ -264,6 +287,59 @@ jobs:
               echo "  OK   ${p}: disabled"
             fi
           done
+
+      - name: Clean removed LuCI apps (honk / ttyd) and legacy whitelist
+        run: |
+          set -euo pipefail
+
+          # 包层面已在 STRIP_PACKAGES 中剔除；这里补三件必须一起做的事：
+          # 1) 删掉仓库 files/ 下手写的 LuCI 菜单入口、ACL 与前端视图
+          # 2) 从 files/etc/sysupgrade.conf 剔除对应路径，
+          #    否则 sysupgrade 会把旧系统的入口文件原样搬回来，菜单照旧出现
+          # 3) 校验 menu.d，确保不再声明这些入口
+          #    ttyd 上游 1.7.7 与 libwebsockets 5.1 不兼容（启动即退出），
+          #    决定不再提供网页终端，日常运维统一走 SSH（dropbear 内置）
+          rm -f  files/usr/share/luci/menu.d/luci-app-honk.json
+          rm -f  files/usr/share/rpcd/acl.d/luci-app-honk.json
+          rm -rf files/www/luci-static/resources/view/honk
+          rm -rf files/www/luci-static/resources/honk
+          rm -f  files/etc/config/honk
+          rm -f  files/usr/share/luci/menu.d/luci-app-ttyd.json
+          rm -rf files/www/luci-static/resources/view/ttyd
+          rm -f  files/etc/config/ttyd
+
+          if [ -f files/etc/sysupgrade.conf ]; then
+            grep -v -E '^(/usr/bin/honk|/usr/bin/honk-core|/usr/bin/honk-install|/usr/share/luci/menu.d/luci-app-honk.json|/usr/share/rpcd/acl.d/luci-app-honk.json|/www/luci-static/resources/view/honk|/www/luci-static/resources/honk|/etc/honk|/etc/config/honk|/usr/share/luci/menu.d/luci-app-ttyd.json|/www/luci-static/resources/view/ttyd|/etc/config/ttyd)$' \
+              files/etc/sysupgrade.conf > /tmp/sysupgrade.conf.new || true
+            mv /tmp/sysupgrade.conf.new files/etc/sysupgrade.conf
+          fi
+
+          echo "=== remaining honk/ttyd paths under files/ ==="
+          find files \( -ipath '*honk*' -o -ipath '*ttyd*' \) 2>/dev/null || true
+
+          for entry in 'admin/services/honk' 'admin/services/ttyd'; do
+            if grep -rq "${entry}" files/usr/share/luci/menu.d/ 2>/dev/null; then
+              echo "::error::Menu entry still present: ${entry}"
+              exit 1
+            fi
+          done
+          echo "OK: honk/ttyd menu entries stripped; SSH (dropbear) remains the only shell access"
+
+      - name: Stage uci-defaults for UPnP
+        run: |
+          set -euo pipefail
+          mkdir -p files/etc/uci-defaults
+          printf '%s\n' \
+            '#!/bin/sh' \
+            '# 首次开机自动启用 UPnP（/etc/config/upnpd 默认 enabled=0）' \
+            '[ -f /etc/config/upnpd ] || exit 0' \
+            "uci -q set upnpd.config.enabled='1'" \
+            'uci -q commit upnpd' \
+            'exit 0' \
+            > files/etc/uci-defaults/99-ponwrt-upnp
+          chmod +x files/etc/uci-defaults/99-ponwrt-upnp
+          echo "=== staged script ==="
+          cat files/etc/uci-defaults/99-ponwrt-upnp
 
       - name: Download package sources
         run: make download -j"$(nproc)"
@@ -314,7 +390,8 @@ jobs:
         id: tag
         if: github.event.inputs.upload_release != 'false'
         run: |
-          echo "release_tag=v$(date +'%Y.%m.%d-%H%M')" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=v$(date -u +'%Y.%m.%d-%H%M')" >> "${GITHUB_OUTPUT}"
+          echo "build_time=$(date -u +'%Y-%m-%d %H:%M UTC')" >> "${GITHUB_OUTPUT}"
 
       - name: Upload firmware to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -330,4 +407,19 @@ jobs:
             - 设备：FiberHome HG5382A（`fiberhome_hg5382a`，AN7581）
             - 跟随上游 `wuziwei/ponwrt-ZN504-HG5585F` master 自动同步并编译
             - 仅包含本机型 sysupgrade / recovery 固件及校验值
+            - 构建触发：${{ github.event_name == 'workflow_dispatch' && '手动 Run workflow' || '上游更新自动触发' }}
+            - 构建时间：${{ steps.tag.outputs.build_time }}
+
+            ### 上游变更日志
+
+            ${{ needs.sync-upstream.outputs.changelog || '- 未获取到上游变更信息' }}
+
+            ### 本仓库定制项
+
+            - 仅保留 `fiberhome_hg5382a` 单机型，剔除其它 an7581 设备
+            - 剔除 Wi-Fi 与 USB 相关包（本机无无线、无 USB 口）
+            - 移除 Honk 透明代理整套（核心 / LuCI / i18n / 依赖），并清除菜单入口与 sysupgrade 白名单残留
+            - 移除 ttyd 网页终端（上游 1.7.7 与 libwebsockets 5.1 不兼容），运维统一走 SSH（dropbear 内置）
+            - LuCI 仅保留简体中文（`zh_Hans` / `-zh-cn`）
+            - 内核保留 `DEBUG_INFO`，关闭 BTF / BPF_EVENTS
           files: output/*
