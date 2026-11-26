@@ -24,8 +24,9 @@ on:
           - '重新编译'
           - '不使用缓存'
   schedule:
-    # 每天 UTC 21:00（北京时间次日 05:00）检查上游是否有更新
-    - cron: '0 21 * * *'
+    # 每 6 小时检查一次上游（UTC 0/6/12/18 → 北京 08:00 / 14:00 / 20:00 / 02:00）
+    # 检查本身只跑 sync 任务（几十秒）；只有上游确有新提交时才会进入编译
+    - cron: '0 */6 * * *'
   # 注意：push 触发已按需求关闭，修改文件后不会自动编译；
   # 需要出包请在 Actions 页面手动 Run workflow。
 
@@ -83,10 +84,16 @@ jobs:
             printf 'changelog<<__CHANGELOG_EOF__\n%s\n__CHANGELOG_EOF__\n' "$1" >> "${GITHUB_OUTPUT}"
           }
 
-          if [ "${UPSTREAM_SHA}" = "${OLD_SHA}" ]; then
+          # 注意：fork 内带有本仓库的 workflow 提交，且同步会产生合并提交，
+          # HEAD 的 SHA 永远不等于上游 HEAD，不能用 SHA 相等判断“是否有更新”，
+          # 否则每天定时都会误判成有新版本，白跑一轮完整编译。
+          # 正确做法：看上游 HEAD 相对 fork 还领先多少个提交。
+          AHEAD_COUNT="$(git rev-list --count "HEAD..upstream/${UPSTREAM_BRANCH}")"
+          echo "upstream_ahead=${AHEAD_COUNT}"
+          if [ "${AHEAD_COUNT}" -eq 0 ]; then
             echo "updated=false" >> "${GITHUB_OUTPUT}"
-            emit_changelog "- 上游 master 无新提交，本次为手动重新编译"
-            echo "Fork already matches upstream, nothing to sync."
+            emit_changelog "- 上游 master 无新提交"
+            echo "Upstream has no new commits; nothing to sync."
             exit 0
           fi
 
