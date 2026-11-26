@@ -180,6 +180,20 @@ jobs:
           rm -rf package/luci-theme-7dollar
           git clone --depth 1 https://github.com/itsmaiGe/luci-theme-7dollar.git package/luci-theme-7dollar
           test -f package/luci-theme-7dollar/Makefile || { echo "::error::7Dollar Makefile missing after clone"; exit 1; }
+          # 关键修补：luci.mk 里 LUCI_MINIFY_UT 默认为 1，而 7Dollar 自带 ucode/template，
+          # 会触发两件对本固件有害的事：
+          #   1) 给包写入 EXTRA_DEPENDS "ucode (>=2026.02.27)"，本固件 ucode 低于该门槛，
+          #      包安装进 rootfs 时依赖无法满足 -> "ERROR: package/luci-theme-7dollar failed to build"
+          #   2) 用 host ucode 预编译 ucode/template 下的模板，host 与 target 字节码格式不一致时，
+          #      设备上会直接拒绝加载模板，主题白屏
+          # 7Dollar 自己已经预编译/自带页面框架，关掉模板预编译即可，对其它包零影响
+          if grep -q '^LUCI_MINIFY_UT' package/luci-theme-7dollar/Makefile; then
+            sed -i 's/^LUCI_MINIFY_UT.*/LUCI_MINIFY_UT:=0/' package/luci-theme-7dollar/Makefile
+          else
+            sed -i '/^LUCI_MINIFY_JS/a LUCI_MINIFY_UT:=0' package/luci-theme-7dollar/Makefile
+          fi
+          grep -q '^LUCI_MINIFY_UT:=0' package/luci-theme-7dollar/Makefile || { echo "::error::failed to disable LUCI_MINIFY_UT for 7Dollar"; exit 1; }
+          grep -n 'LUCI_MINIFY' package/luci-theme-7dollar/Makefile
           grep -m1 '^PKG_NAME:=' package/luci-theme-7dollar/Makefile
           grep -m1 '^PKG_VERSION:=' package/luci-theme-7dollar/Makefile
           ls package/luci-theme-7dollar/htdocs/luci-static/ 2>/dev/null || true
