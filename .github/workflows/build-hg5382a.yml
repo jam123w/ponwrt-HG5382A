@@ -172,6 +172,18 @@ jobs:
         run: |
           bash ./scripts/customize.sh
 
+      - name: Add luci-theme-7dollar
+        run: |
+          set -euo pipefail
+          # 7Dollar 不在上游 feeds 里，构建前克隆到 package/ 让 buildroot 扫描到
+          # 该包 Makefile 依赖 $(TOPDIR)/feeds/luci/luci.mk，feeds 已在前面安装完毕
+          rm -rf package/luci-theme-7dollar
+          git clone --depth 1 https://github.com/itsmaiGe/luci-theme-7dollar.git package/luci-theme-7dollar
+          test -f package/luci-theme-7dollar/Makefile || { echo "::error::7Dollar Makefile missing after clone"; exit 1; }
+          grep -m1 '^PKG_NAME:=' package/luci-theme-7dollar/Makefile
+          grep -m1 '^PKG_VERSION:=' package/luci-theme-7dollar/Makefile
+          ls package/luci-theme-7dollar/htdocs/luci-static/ 2>/dev/null || true
+
       - name: Restore compiler ccache
         if: (github.event.inputs.cache_mode || '使用缓存') != '不使用缓存'
         uses: actions/cache/restore@v4
@@ -274,6 +286,9 @@ jobs:
           sed -i -E '/^CONFIG_PACKAGE_(miniupnpd|luci-app-upnp)/d' .config
           printf 'CONFIG_PACKAGE_miniupnpd-nftables=y\nCONFIG_PACKAGE_luci-app-upnp=y\n' >> .config
 
+          # 内置 7Dollar 主题（源码在上一 step 克隆到 package/）
+          printf 'CONFIG_PACKAGE_luci-theme-7dollar=y\n' >> .config
+
           if [ "${{ github.event.inputs.cache_mode || '使用缓存' }}" != "不使用缓存" ]; then
             sed -i '/^CONFIG_DEVEL=/d; /^CONFIG_CCACHE=/d' .config
             printf 'CONFIG_DEVEL=y\nCONFIG_CCACHE=y\n' >> .config
@@ -339,7 +354,7 @@ jobs:
           done
           echo "OK: honk/ttyd menu entries stripped; SSH (dropbear) remains the only shell access"
 
-      - name: Stage uci-defaults for UPnP
+      - name: Stage uci-defaults (UPnP + 7Dollar theme)
         run: |
           set -euo pipefail
           mkdir -p files/etc/uci-defaults
@@ -352,8 +367,22 @@ jobs:
             'exit 0' \
             > files/etc/uci-defaults/99-ponwrt-upnp
           chmod +x files/etc/uci-defaults/99-ponwrt-upnp
-          echo "=== staged script ==="
-          cat files/etc/uci-defaults/99-ponwrt-upnp
+
+          # 7Dollar 作为默认主题；Argon 仍保留在固件里，可随时切回
+          printf '%s\n' \
+            '#!/bin/sh' \
+            '# 默认主题 7Dollar（luci-static/7dollar）' \
+            "[ -f /etc/config/luci ] || touch /etc/config/luci" \
+            "uci -q set luci.themes.7Dollar='/luci-static/7dollar'" \
+            "uci -q set luci.main.mediaurlbase='/luci-static/7dollar'" \
+            "uci -q set luci.main.theme='7dollar'" \
+            'uci -q commit luci' \
+            'exit 0' \
+            > files/etc/uci-defaults/99-ponwrt-theme
+          chmod +x files/etc/uci-defaults/99-ponwrt-theme
+
+          echo "=== staged uci-defaults ==="
+          for f in files/etc/uci-defaults/*; do echo "--- $f"; cat "$f"; done
 
       - name: Download package sources
         run: make download -j"$(nproc)"
@@ -435,6 +464,6 @@ jobs:
             - 移除 Honk 透明代理整套（核心 / LuCI / i18n / 依赖），并清除菜单入口与 sysupgrade 白名单残留
             - 移除 ttyd 网页终端（上游 1.7.7 与 libwebsockets 5.1 不兼容），运维统一走 SSH（dropbear 内置）
             - LuCI 仅保留简体中文（`zh_Hans` / `-zh-cn`）
-            - 主题精简：仅保留 `luci-theme-argon`，移除 `footstrap` 与 `bootstrap`
+            - 主题：内置 `7Dollar`（itsmaiGe/luci-theme-7dollar）并设为默认，保留 `Argon` 可切换；移除 `footstrap` 与 `bootstrap`
             - 内核保留 `DEBUG_INFO`，关闭 BTF / BPF_EVENTS
           files: output/*
