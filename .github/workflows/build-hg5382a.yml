@@ -211,6 +211,7 @@ jobs:
           #   honk 整套（核心 + LuCI + i18n + dae 库 + geo 数据）及其 nft/tproxy/queue 依赖
           #   bpftool / kmod-sched-bpf 随 honk 移除
           #   kmod-tun / kmod-inet-diag / kmod-veth / kmod-dummy 刻意保留（VPN 与 ss 诊断需要）
+          #   主题只保留 Argon（an7581.config 默认 y），footstrap / bootstrap 一并剔除
           STRIP_PACKAGES="
             wpad-openssl
             kmod-cfg80211
@@ -253,6 +254,8 @@ jobs:
             luci-app-ttyd
             luci-i18n-ttyd-zh-cn
             ttyd
+            luci-theme-footstrap
+            luci-theme-bootstrap
           "
           for p in ${STRIP_PACKAGES}; do
             sed -i "/^CONFIG_PACKAGE_${p}=/d" .config
@@ -314,6 +317,10 @@ jobs:
           rm -f  files/usr/share/luci/menu.d/luci-app-ttyd.json
           rm -rf files/www/luci-static/resources/view/ttyd
           rm -f  files/etc/config/ttyd
+
+          # 上游 scripts/customize.sh 会 git clone footstrap 源码到 package/，
+          # 既然不打包该主题，顺手删掉省一轮编译时间
+          rm -rf package/luci-theme-footstrap
 
           if [ -f files/etc/sysupgrade.conf ]; then
             grep -v -E '^(/usr/bin/honk|/usr/bin/honk-core|/usr/bin/honk-install|/usr/share/luci/menu.d/luci-app-honk.json|/usr/share/rpcd/acl.d/luci-app-honk.json|/www/luci-static/resources/view/honk|/www/luci-static/resources/honk|/etc/honk|/etc/config/honk|/usr/share/luci/menu.d/luci-app-ttyd.json|/www/luci-static/resources/view/ttyd|/etc/config/ttyd)$' \
@@ -428,5 +435,6 @@ jobs:
             - 移除 Honk 透明代理整套（核心 / LuCI / i18n / 依赖），并清除菜单入口与 sysupgrade 白名单残留
             - 移除 ttyd 网页终端（上游 1.7.7 与 libwebsockets 5.1 不兼容），运维统一走 SSH（dropbear 内置）
             - LuCI 仅保留简体中文（`zh_Hans` / `-zh-cn`）
+            - 主题精简：仅保留 `luci-theme-argon`，移除 `footstrap` 与 `bootstrap`
             - 内核保留 `DEBUG_INFO`，关闭 BTF / BPF_EVENTS
           files: output/*
