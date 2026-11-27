@@ -16,18 +16,17 @@ Signed-off-by: Ziwei Wu <wuziwei518@gmail.com>
 ---
 --- a/drivers/net/ethernet/airoha/airoha_ppe.c
 +++ b/drivers/net/ethernet/airoha/airoha_ppe.c
-@@ -402,7 +402,14 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
+@@ -487,5 +487,13 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
+ 	dsa_port = airoha_get_dsa_port(&netdev);
  	memset(hwe, 0, sizeof(*hwe));
  	*egress_dev = NULL;
- 
-+	/* The AN7581 PPE IPv6 PPPoE route path is not stable under
-+	 * concurrent flows (about half of parallel IPv6 flows are
-+	 * black-holed). Keep IPv4 hardware offload and let IPv6 fall
-+	 * back to the software flowtable, which sustains line rate.
++
++	/* The AN7581 PPE IPv6 PPPoE route offload path is not stable with
++	 * concurrent flows: about half of parallel IPv6 flows are
++	 * black-holed. Keep IPv4 hardware offload and let IPv6 stay on
++	 * the software flowtable, which sustains line rate on this SoC.
 +	 */
 +	if (type >= PPE_PKT_TYPE_IPV6_ROUTE_3T)
 +		return -EOPNOTSUPP;
-+
+ 
  	val = FIELD_PREP(AIROHA_FOE_IB1_BIND_STATE, AIROHA_FOE_STATE_BIND) |
- 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_PACKET_TYPE, type) |
- 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_UDP, l4proto == IPPROTO_UDP) |
