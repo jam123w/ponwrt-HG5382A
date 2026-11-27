@@ -1,0 +1,33 @@
+From: Ziwei Wu <wuziwei518@gmail.com>
+Subject: [PATCH] net: airoha: keep IPv6 on the software flowtable path on AN7581
+
+The AN7581 PPE hardware IPv6 route offload path is not stable with
+concurrent PPPoE flows. With 8 parallel IPv6 downloads, roughly half of
+the flows are black-holed (5-8 KB/s) while the rest reach ~10 MB/s; after
+clearing the PPE tables a single flow runs at 11.3 MB/s, so the FOE entry
+itself is correct, but the bind/forwarding path is unreliable. Lowering
+PPE_BIND_RATE from 30 to 2 makes every flow black-hole immediately.
+
+Keep IPv4 hardware offload and let IPv6 stay on the software flowtable
+path, which sustains line rate (~471 Mbps) on this SoC.
+
+Signed-off-by: Ziwei Wu <wuziwei518@gmail.com>
+
+---
+--- a/drivers/net/ethernet/airoha/airoha_ppe.c
++++ b/drivers/net/ethernet/airoha/airoha_ppe.c
+@@ -402,7 +402,14 @@ static int airoha_ppe_foe_entry_prepare(struct airoha_eth *eth,
+ 	memset(hwe, 0, sizeof(*hwe));
+ 	*egress_dev = NULL;
+ 
++	/* The AN7581 PPE IPv6 PPPoE route path is not stable under
++	 * concurrent flows (about half of parallel IPv6 flows are
++	 * black-holed). Keep IPv4 hardware offload and let IPv6 fall
++	 * back to the software flowtable, which sustains line rate.
++	 */
++	if (type >= PPE_PKT_TYPE_IPV6_ROUTE_3T)
++		return -EOPNOTSUPP;
++
+ 	val = FIELD_PREP(AIROHA_FOE_IB1_BIND_STATE, AIROHA_FOE_STATE_BIND) |
+ 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_PACKET_TYPE, type) |
+ 	      FIELD_PREP(AIROHA_FOE_IB1_BIND_UDP, l4proto == IPPROTO_UDP) |
